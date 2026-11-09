@@ -1,0 +1,18 @@
+.idea/
+
+# terraform examples/
+examples/**/.terraform/
+examples/**/terraform.d/
+examples/**/crash.log
+examples/**/*.tfstate
+examples/**/*.tfstate.backup
+examples/**/.terraform.lock.hcl
+examples/**/*.tfvars
+examples/**/.kube/*
+terraform.tfstate
+.terraform*
+
+# Local root-module configuration (may contain secrets such as the CAST AI API token)
+terraform.tfvars
+terraform.tfvars.old
+.DS_Store

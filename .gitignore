@@ -1,18 +1,27 @@
+# macOS / IDE
+.DS_Store
 .idea/
 
-# terraform examples/
-examples/**/.terraform/
-examples/**/terraform.d/
-examples/**/crash.log
-examples/**/*.tfstate
-examples/**/*.tfstate.backup
-examples/**/.terraform.lock.hcl
-examples/**/*.tfvars
-examples/**/.kube/*
-terraform.tfstate
+# Terraform working directory, provider plugins and lock file
 .terraform*
+terraform.d/
 
-# Local root-module configuration (may contain secrets such as the CAST AI API token)
-terraform.tfvars
-terraform.tfvars.old
-.DS_Store
+# Local state and plan files
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Local variable files (may contain secrets such as the CAST AI API token)
+*.tfvars
+*.tfvars.json
+
+# Terraform override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform examples
+examples/**/.kube/

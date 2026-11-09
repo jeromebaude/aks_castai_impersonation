@@ -1,0 +1,26 @@
+aks_cluster_name   = "xxx"
+aks_cluster_region = "xxx"
+resource_group     = "xxx"
+subscription_id    = "xxx"
+castai_api_token   = "xxx"
+castai_api_url     = "https://api.eu.cast.ai"
+
+# AKS node resource group. Verify with:
+#   az aks show -g resource_group -n aks_cluster_name --query nodeResourceGroup -o tsv
+node_resource_group = "xxx"
+
+# Microsoft Entra tenant owning the subscription (az account show --query tenantId -o tsv)
+tenant_id = "xxx"
+
+# true: create CastAKSRole-<cluster>-tf and assign it on the resource groups.
+# false: create only the service principal / managed identity, with no role.
+create_role = true
+
+node_configurations = {
+  default = {
+    subnets = ["/subscriptions/$subscription_id/resourceGroups/$node_resource_group/providers/Microsoft.Network/virtualNetworks/xxx/subnets/xxx"]
+  }
+}
+
+# Must resolve to a key of node_configurations, otherwise the default lookup fails
+default_node_configuration = "default"

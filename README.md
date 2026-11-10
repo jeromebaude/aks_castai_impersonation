@@ -20,7 +20,7 @@ It is derived from the CAST AI AKS module (`castai/aks/castai`) and keeps its Ap
 What it creates
 ---------------
 
-* `azuread` / `azurerm` authentication resources: a user-assigned managed identity with a federated identity credential (default), or an Entra application, service principal and client secret (`authentication_method = "client_secret"`)
+* `azuread` / `azurerm` authentication resources: a user-assigned managed identity with a federated identity credential (default) (see https://docs.cast.ai/docs/sa-impersonation-aks), or an Entra application, service principal and client secret (`authentication_method = "client_secret"`)
 * The custom role `CastAKSRole-<cluster-name>-tf` and its role assignments on `resource_group`, `node_resource_group` and `additional_resource_groups` - **optional**, see [Role creation](#role-creation)
 * The CAST AI cluster registration (`castai_aks_cluster`)
 * CAST AI-side configuration: node configurations, node templates, autoscaler settings, workload scaling policies and custom metrics data sources

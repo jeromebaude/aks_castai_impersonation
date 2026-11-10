@@ -1,7 +1,5 @@
-# Root-module provider configuration.
-#
-# This repository is published as a child module, so it ships without provider
-# blocks. When applying this directory directly, these blocks are required.
+# Provider configuration for this root configuration.
+# Credentials come from az login or ARM_* environment variables.
 
 provider "azurerm" {
   features {}

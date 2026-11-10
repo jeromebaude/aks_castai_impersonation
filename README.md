@@ -6,555 +6,174 @@
   </picture>
 </a>
 
-Terraform module for connecting a AKS cluster to CAST AI
+AKS to CAST AI onboarding (Terraform root configuration)
 ==================
-
 
 Website: https://www.cast.ai
 
-Requirements
-------------
+This repository is a standalone Terraform **root configuration**, not a reusable module. You copy it, fill in `terraform.tfvars` and run `terraform apply` from this directory.
 
-- [Terraform](https://www.terraform.io/downloads.html) 0.13+
+It creates the Azure IAM objects CAST AI needs and registers an existing AKS cluster with CAST AI. It does not install anything into the cluster.
 
-Using the module
-------------
+It is derived from the CAST AI AKS module (`castai/aks/castai`) and keeps its Apache-2.0 licence.
 
-A module to create Azure role and a service principal that can be used to connect to CAST AI
+What it creates
+---------------
 
-This module does **not** install CAST AI components into the cluster and runs no Helm command. It creates the Azure IAM objects (role definition and role assignments, service principal with a client secret or a managed identity with a federated identity credential), the CAST AI cluster registration, and the CAST AI-side configuration (node configurations and templates, autoscaler settings, workload scaling policies, custom metrics data sources). Install and upgrade the CAST AI Helm charts separately, for example with the umbrella chart or the standalone charts.
+* `azuread` / `azurerm` authentication resources: a user-assigned managed identity with a federated identity credential (default), or an Entra application, service principal and client secret (`authentication_method = "client_secret"`)
+* The custom role `CastAKSRole-<cluster-name>-tf` and its role assignments on `resource_group`, `node_resource_group` and `additional_resource_groups` - **optional**, see [Role creation](#role-creation)
+* The CAST AI cluster registration (`castai_aks_cluster`)
+* CAST AI-side configuration: node configurations, node templates, autoscaler settings, workload scaling policies and custom metrics data sources
 
-Requires `castai/castai`, `hashicorp/azurerm`, `hashicorp/azuread` providers to be configured.
-
-The required parameters can be provided manually or alternatively can be easily acquired from your AKS cluster resource or Azure RM subscription data source.
-
-```hcl
-module "castai-aks-cluster" {
-  source = "castai/aks/castai"
-
-  aks_cluster_name    = var.aks_cluster_name
-  aks_cluster_region  = var.aks_cluster_region
-  node_resource_group = azurerm_kubernetes_cluster.example.node_resource_group
-  resource_group      = azurerm_kubernetes_cluster.example.resource_group_name
-
-  delete_nodes_on_disconnect = true
-
-  subscription_id = data.azurerm_subscription.current.subscription_id
-  tenant_id       = data.azurerm_subscription.current.tenant_id
-
-  default_node_configuration = module.castai-aks-cluster.castai_node_configurations["default"]
-
-  node_configurations = {
-    default = {
-      disk_cpu_ratio = 25
-      subnets        = [azurerm_subnet.internal.id]
-      tags           = {
-        "node-config" : "default"
-      }
-    }
-  }
-  node_templates = {
-    spot_tmpl = {
-      configuration_id = module.castai-aks-cluster.castai_node_configurations["default"]
-
-      should_taint = true
-
-      custom_labels = {
-        custom-label-key-1 = "custom-label-value-1"
-        custom-label-key-2 = "custom-label-value-2"
-      }
-
-      custom_taints = [
-        {
-          key = "custom-taint-key-1"
-          value = "custom-taint-value-1"
-        },
-        {
-          key = "custom-taint-key-2"
-          value = "custom-taint-value-2"
-        }
-      ]
-
-      constraints = {
-        fallback_restore_rate_seconds = 1800
-        spot = true
-        use_spot_fallbacks = true
-        min_cpu = 4
-        max_cpu = 100
-        instance_families = {
-          exclude = ["standard_DPLSv5"]
-        }
-        compute_optimized_state = "disabled"
-        storage_optimized_state = "disabled"
-      }
-    }
-  }
-
-  autoscaler_settings = {
-    enabled                                 = true
-    node_templates_partial_matching_enabled = false
-
-    unschedulable_pods = {
-      enabled = true
-    }
-
-    node_downscaler = {
-      enabled = true
-
-      empty_nodes = {
-        enabled = true
-      }
-
-      evictor = {
-        aggressive_mode           = false
-        cycle_interval            = "5s10s"
-        dry_run                   = false
-        enabled                   = true
-        node_grace_period_minutes = 10
-        scoped_mode               = false
-      }
-    }
-
-    cluster_limits = {
-      enabled = true
-
-      cpu = {
-        max_cores = 20
-        min_cores = 1
-      }
-    }
-  }
-
-  workload_scaling_policies = {
-    default = {
-      apply_type        = "IMMEDIATE"
-      management_option = "MANAGED"
-
-      cpu = {
-        function                 = "QUANTILE"
-        args                     = ["0.9"]
-        overhead                 = 0.15
-        look_back_period_seconds = 172800
-
-        # Prefer the new constraints block. Within each min/max strategy only
-        # one of `constant` or `percentage_of_original` may be set. Legacy
-        # `min`/`max` (plain numbers) are still accepted for backward
-        # compatibility, but if both legacy `min`/`max` and `constraints`
-        # are supplied for the same resource, `constraints` takes precedence
-        # and the module omits the legacy `min`/`max` so the provider does
-        # not reject the config.
-        constraints = {
-          min = {
-            constant = 0.1
-          }
-          max = {
-            constant = 2.0
-          }
-        }
-      }
-
-      memory = {
-        function                 = "MAX"
-        overhead                 = 0.35
-        look_back_period_seconds = 172800
-
-        limit = {
-          type = "NO_LIMIT"
-        }
-      }
-
-      assignment_rules = {
-        rules = [
-          {
-            namespace = {
-              names = ["default", "kube-system"]
-            }
-          },
-          {
-            workload = {
-              gvk = ["Deployment", "StatefulSet"]
-              labels_expressions = [
-                {
-                  key      = "region"
-                  operator = "NotIn"
-                  values   = ["eu-west-1", "eu-west-2"]
-                },
-                {
-                  key      = "helm.sh/chart"
-                  operator = "Exists"
-                }
-              ]
-            }
-          }
-        ]
-      }
-
-      startup = {
-        period_seconds = 300
-        two_phase_recommendations = {
-          enabled = true
-          requests_on_startup = {
-            cpu_cores  = 0.5
-            memory_gib = 1.5
-          }
-        }
-      }
-
-      predictive_scaling = {
-        cpu = {
-          enabled = true
-        }
-      }
-
-      jvm = {
-        auto_instrument = true
-        memory = {
-          optimization = true
-        }
-      }
-
-      anomaly_detection = {
-        cpu_pressure = {
-          cpu_stall_threshold_percentage = 50
-          min_pressured_pod_percentage   = 30
-        }
-      }
-
-      excluded_containers = ["container-1", "container-2"]
-
-      # Convert existing HPA utilization (%) targets to AverageValue using the
-      # workload's original container requests. Ignored if HPA management is enabled.
-      hpa_converters = [
-        {
-          type = "AVERAGE_VALUE_FROM_ORIGINAL_REQUESTS"
-        }
-      ]
-    }
-  }
-
-  workload_custom_metrics_data_sources = {
-    my-prometheus = {
-      prometheus = {
-        url     = "http://prometheus-server.monitoring.svc.cluster.local:9090"
-        timeout = "30s"
-        presets = ["jvm"]
-
-        metrics = [
-          {
-            name  = "http_requests_total"
-            query = "sum(rate(http_requests_total[5m])) by (pod)"
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-Optional Azure role
+What it does not do
 -------------------
 
-By default the module creates the custom role definition `CastAKSRole-<cluster-name>-tf` and assigns it to the CAST AI principal on `resource_group`, `node_resource_group` and every entry of `additional_resource_groups`. Set `create_role = false` when the permissions are granted by other means (an existing role, a policy-driven setup, or another Terraform stack):
+There is no `helm_release` and no Kubernetes object in this configuration. Install and upgrade the CAST AI components separately, see [Installing the CAST AI components](#installing-the-cast-ai-components).
+
+Prerequisites
+-------------
+
+* Terraform CLI. This configuration is validated with Terraform 1.12.2
+* Providers, declared in `versions.tf`: `hashicorp/azurerm >= 5.0.1`, `hashicorp/azuread >= 3.0`, `castai/castai >= 8.57.0`
+* Azure credentials allowed to create role definitions and role assignments: `az login`, or `ARM_*` environment variables
+* A CAST AI API token: console.cast.ai -> **API access keys**
+
+Usage
+-----
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+# fill in the values, then:
+terraform init
+terraform plan
+terraform apply
+```
+
+Values that must be provided in `terraform.tfvars`:
+
+| Variable | Where it comes from |
+|---|---|
+| `aks_cluster_name`, `aks_cluster_region`, `resource_group`, `subscription_id` | your AKS cluster |
+| `node_resource_group` | `az aks show -g <resource_group> -n <cluster> --query nodeResourceGroup -o tsv` |
+| `tenant_id` | `az account show --query tenantId -o tsv` |
+| `castai_api_token` | CAST AI Console -> API access keys |
+| `node_configurations` and `default_node_configuration` | at least one configuration; `default_node_configuration` must be one of its keys |
+
+`castai_api_url` defaults to `https://api.cast.ai`; set `https://api.eu.cast.ai` for the EU region.
+
+Outputs: `cluster_id`, `organization_id`, `castai_node_configurations`, `castai_node_templates`.
+
+Providers
+---------
+
+`providers.tf` configures all three providers from the variables above, so no additional configuration is required:
 
 ```hcl
-module "castai-aks-cluster" {
-  source = "castai/aks/castai"
+provider "azurerm" {
+  features {}
 
-  # ... required parameters ...
+  subscription_id = var.subscription_id
+}
 
-  create_role = false
+provider "azuread" {
+  tenant_id = var.tenant_id
+}
+
+provider "castai" {
+  api_url   = var.castai_api_url
+  api_token = var.castai_api_token
 }
 ```
 
-No role definition and no role assignment is created in that case. The CAST AI principal still exists (`workload_identity` or `client_secret` authentication), so the required permissions must be granted to it before CAST AI can create, resize or delete nodes.
+Role creation
+-------------
 
-Migrating from 2.x.x to 3.x.x
----------------------------
+`create_role` defaults to `true`: the module creates `CastAKSRole-<cluster-name>-tf` and assigns it to the CAST AI principal on `resource_group`, `node_resource_group` and every entry of `additional_resource_groups`.
 
-Version 3.x.x changes:
-* Removed `custom_label` attribute in `castai_node_template` resource. Use `custom_labels` instead.
+Set `create_role = false` when the permissions are granted by other means (an existing role, a policy-driven setup, or another Terraform stack):
 
-Old configuration:
-```terraform
-module "castai-aks-cluster" {
-  node_templates = {
-    spot_tmpl = {
-      custom_label = {
-        key = "custom-label-key-1"
-        value = "custom-label-value-1"
-      }
-    }
-  }
-}
-```
-
-New configuration:
-```terraform
-module "castai-aks-cluster" {
-  node_templates = {
-    spot_tmpl = {
-      custom_labels = {
-        custom-label-key-1 = "custom-label-value-1"
-      }
-    }
-  }
-}
-```
-Migrating from 3.x.x to 4.x.x
----------------------------
-
-Version 4.x.x changed:
-* Removed `compute_optimized` and `storage_optimized` attributes in `castai_node_template` resource, `constraints` object. Use `compute_optimized_state` and `storage_optimized_state` instead.
-
-Old configuration:
-```terraform
-module "castai-aks-cluster" {
-  node_templates = {
-    spot_tmpl = {
-      constraints = {
-        compute_optimized = false
-        storage_optimized = true
-      }
-    }
-  }
-}
-```
-
-New configuration:
-```terraform
-module "castai-aks-cluster" {
-  node_templates = {
-    spot_tmpl = {
-      constraints = {
-        compute_optimized_state = "disabled"
-        storage_optimized_state = "enabled"
-      }
-    }
-  }
-}
-```
-
-Migrating from 5.0.x to 5.2.x
----------------------------
-
-Version 5.2.x changed:
-* Deprecated `autoscaler_policies_json` attribute. Use `autoscaler_settings` instead.
-
-Old configuration:
 ```hcl
-module "castai-aks-cluster" {
-  autoscaler_policies_json = <<-EOT
-    {
-        "enabled": true,
-        "unschedulablePods": {
-            "enabled": true
-        },
-        "nodeDownscaler": {
-            "enabled": true,
-            "emptyNodes": {
-                "enabled": true
-            },
-            "evictor": {
-                "aggressiveMode": false,
-                "cycleInterval": "5m10s",
-                "dryRun": false,
-                "enabled": true,
-                "nodeGracePeriodMinutes": 10,
-                "scopedMode": false
-            }
-        },
-        "nodeTemplatesPartialMatchingEnabled": false,
-        "clusterLimits": {
-            "cpu": {
-                "maxCores": 20,
-                "minCores": 1
-            },
-            "enabled": true
-        }
-    }
-  EOT
-}
+create_role = false
 ```
 
-New configuration:
-```hcl
-module "castai-aks-cluster" {
-  autoscaler_settings = {
-    enabled                                 = true
-    node_templates_partial_matching_enabled = false
+No role definition and no role assignment is created in that case. The CAST AI principal still exists, so the required permissions must be granted to it before CAST AI can create, resize or delete nodes.
 
-    unschedulable_pods = {
-      enabled = true
-    }
+Authentication
+--------------
 
-    node_downscaler = {
-      enabled = true
+`authentication_method` selects how CAST AI authenticates to Azure:
 
-      empty_nodes = {
-        enabled = true
-      }
+* `workload_identity` (default) - a user-assigned managed identity plus a federated identity credential. No long-lived secret.
+* `client_secret` - an Entra application with a service principal and a client secret.
 
-      evictor = {
-        aggressive_mode           = false
-        cycle_interval            = "5m10s"
-        dry_run                   = false
-        enabled                   = true
-        node_grace_period_minutes = 10
-        scoped_mode               = false
-      }
-    }
+`authentication_method_migration` controls the switch between the two methods (`none`, `prepare`, `keep-secret-auth`). Switching from `client_secret` to `workload_identity` destroys the Entra application and its secret; use `keep-secret-auth` to keep the client-secret credentials as a fallback while migrating.
 
-    cluster_limits = {
-      enabled = true
+Installing the CAST AI components
+---------------------------------
 
-      cpu = {
-        max_cores = 20
-        min_cores = 1
-      }
-    }
-  }
-}
+The cluster is registered by `terraform apply`, but the CAST AI components are installed with Helm:
+
+```bash
+helm repo add castai-helm https://castai.github.io/helm-charts
+helm repo update
+
+helm upgrade --install castai castai-helm/castai -n castai-agent --create-namespace \
+  --set global.castai.apiKey=<cluster-token> \
+  --set global.castai.provider=aks \
+  --set tags.workload-autoscaler=true
 ```
 
-Migrating from 9.x.x to 10.x.x
----------------------------
+Replace `<cluster-token>` with the cluster token from the CAST AI console connect instructions; this configuration does not output it. `tags.*` selects the profile (`readonly`, `node-autoscaler`, `workload-autoscaler`, `full`, ...) and the modes are mutually exclusive.
 
-Version 10.x.x removes deprecated autoscaler fields that have been moved to node templates.
+The umbrella chart contains only the CAST AI autoscaler components: `kent`, `autoscaler-anywhere`, `autoscaler-openshift`, `autoscaler` and `readonly-profile`. CAST AI Omni is not part of it and is installed by the separate `castai/omni-cluster/castai` module, so nothing here or in the chart needs to be disabled to avoid it.
 
-**Removed:**
-* `autoscaler_policies_json` - Use `autoscaler_settings` instead
-* `autoscaler_settings.unschedulable_pods.custom_instances_enabled` - No longer needed
-* `autoscaler_settings.unschedulable_pods.headroom` - Use low-priority placeholder workloads instead
-* `autoscaler_settings.unschedulable_pods.headroom_spot` - Use low-priority placeholder workloads instead
-* `autoscaler_settings.unschedulable_pods.node_constraints` - Use `node_templates` constraints instead
-* `autoscaler_settings.spot_instances` - Use `node_templates` constraints instead
+State
+-----
 
-**Migration guide:**
+State is local (`terraform.tfstate`) and is git-ignored, together with `terraform.tfvars` and plan files. For shared or repeated use, configure a remote backend.
 
-Old configuration:
-```hcl
-module "castai-aks-cluster" {
-  source = "castai/aks/castai"
+If this directory previously ran the module version that installed Helm releases, remove those resources from state before applying, otherwise Terraform plans to uninstall them:
 
-  autoscaler_settings = {
-    enabled = true
-
-    unschedulable_pods = {
-      enabled                  = true
-      custom_instances_enabled = true
-
-      headroom = {
-        enabled           = true
-        cpu_percentage    = 10
-        memory_percentage = 10
-      }
-
-      node_constraints = {
-        min_cpu_cores = 4
-        max_cpu_cores = 32
-      }
-    }
-
-    spot_instances = {
-      enabled = true
-      spot_backups = {
-        enabled = true
-      }
-    }
-  }
-}
+```bash
+terraform state list | grep -E '^(helm_release|null_resource\.wait_for_cluster)' | xargs -r -n1 terraform state rm
 ```
 
-New configuration:
-```hcl
-module "castai-aks-cluster" {
-  source = "castai/aks/castai"
+Tests
+-----
 
-  autoscaler_settings = {
-    enabled = true
-
-    unschedulable_pods = {
-      enabled = true
-    }
-  }
-
-  node_templates = {
-    default_by_castai = {
-      configuration_id = module.castai-aks-cluster.castai_node_configurations["default"]
-      is_default       = true
-
-      constraints = {
-        min_cpu            = 4
-        max_cpu            = 32
-        spot               = true
-        use_spot_fallbacks = true
-      }
-    }
-  }
-}
-
-# For headroom: Deploy low-priority placeholder workloads
-# See: https://docs.cast.ai/docs/autoscaler-faq#how-can-i-maintain-cluster-headroom
+```bash
+terraform init
+terraform test
 ```
 
-**Key changes:**
-* Node constraints (`min_cpu_cores`, `max_cpu_cores`, `min_ram_mib`, `max_ram_mib`) are now configured in `node_templates.constraints` as `min_cpu`, `max_cpu`, `min_memory`, `max_memory`
-* Spot instance settings (`spot`, `use_spot_fallbacks`) are now configured in `node_templates.constraints`
-* The default node template is named `default_by_castai`
-* For headroom functionality, deploy low-priority placeholder workloads as described in the [CAST AI documentation](https://docs.cast.ai/docs/autoscaler-faq#how-can-i-maintain-cluster-headroom)
+The `tests/*.tftest.hcl` files use mocked providers, so they need no cloud access and no credentials.
 
-Workload identity migration tooling (added in 12.1.x)
------------------------------------------------------
+Repository layout
+-----------------
 
-Workload identity is the default authentication method from version 13.0.0. Switching an existing cluster from `client_secret` deletes the Azure AD application and its client secret, and a failed apply could leave the cluster disconnected. To make the switch safe and incremental, version 12.1.x introduced the `authentication_method_migration` variable:
+| File | Purpose |
+|---|---|
+| `providers.tf` | `azurerm`, `azuread` and `castai` provider configuration |
+| `versions.tf` | Terraform and provider version constraints |
+| `variables.tf` | All inputs, documented in [Inputs](#inputs) |
+| `main.tf` | CAST AI cluster registration and CAST AI-side configuration |
+| `iam.tf` | Azure role, role assignments, service principal or managed identity |
+| `outputs.tf` | Cluster and node configuration identifiers |
+| `terraform.tfvars.example` | Template for the local `terraform.tfvars` |
+| `tests/` | `terraform test` suites with mocked providers |
 
-* `prepare`: pre-provisions the workload identity resources (a user-assigned managed identity and a federated identity credential) while the module continues to authenticate with `client_secret`. They are not used for authentication and the managed identity receives no role assignments until `authentication_method` is switched, but they allow switching later without creating anything at cutover time. This enables validating that the resources can be created safely. Has no effect if `authentication_method` is `workload_identity`.
-* `keep-secret-auth` (added in 13.0.0): keeps the Azure AD application, service principal and client secret while authenticating with `workload_identity`. Use this to retain the client-secret credentials as a fallback while (or after) switching over - otherwise they are destroyed when `authentication_method` changes and have to be recreated on rollback. This mode has no practical effect while `authentication_method` is `client_secret`. Once cluster is safely migrated to workload identity, the migration can be set to `none` to clean up.
-* `none` (default from 13.0.0): no migration behavior - no additional resources are created, no additional permissions are required, and behavior remains exactly as-is.
+Troubleshooting
+---------------
 
-In the 12.1.x-12.x.x releases, `prepare` was the default so the resources exist ahead of the switch. From 13.0.0 the default is `none`, which automatically cleans up the unused pre-provisioned resources for anyone who had not switched to `workload_identity` yet. If the resources were used as preparation for the switch performed in the same upgrade, they simply stay in use and only the client secret resources are removed.
+* `Invalid provider configuration` - a provider is used but not configured. Keep `providers.tf` in this directory; it is only needed at the root, not in child modules.
+* `Missing API Token Configuration` - `castai_api_token` is empty.
+* `Value for undeclared variable` - `terraform.tfvars` contains a key that does not exist in `variables.tf`.
+* `Missing resource instance key` - a counted resource is referenced without an index, e.g. `azurerm_role_definition.castai[0]`.
 
-Migrating from 12.x.x to 13.x.x
--------------------------------
+Licence
+-------
 
-Version 13.0.0 introduces a new default for the authentication method used by CAST AI to access cloud environments. This new authentication method offers better security by utilizing federated identity and no long-living credentials on CAST AI side. The behavior is controlled by the `authentication_method` variable and its default switches from `client_secret` to `workload_identity`.
-
-To opt-out of the changes, set `authentication_method = "client_secret"` before applying the changes from v13. More details on the settings below.
-
-If the value of the variable was previously set to any value, there is no change in behavior. However, if no value was set and the default was used, upgrading the module will cause the `client_secret` IAM resources to be reconfigured for workload identity - a new managed identity with federated credential is created, while the existing Entra application will be destroyed. To keep the existing Entra application and its client secret instead of destroying them, set `authentication_method_migration = "keep-secret-auth"` (see the migration tooling section above).
-
-> [!CAUTION]
-> While applying the changes, it is possible that CAST AI loses access temporarily while credentials are being reconfigured. In addition, failure to configure Workload identity but successful client secret destruction might lead to loss of access for cluster management by CAST AI. It is recommended that the change is monitored and done carefully.
-
-> [!NOTE]
-> Rolling back to client secret flow after switching to workload identity will create a new Entra application client ID for access - consider that if roles or policies are attached to the application.
-
-If users are using 11.x.x or older, it is recommended that migration to 12.x.x is completed as a separate step from 13.x.x, as both involve delicate migrations. In addition, the standalone releases mentioned in 12.x.x are kept for this release and still available.
-
-Migrating from 13.x.x to the Helm-free release
-----------------------------------------------
-
-This release stops managing CAST AI components in the cluster. The module no longer installs or upgrades anything with Helm:
-
-* every `helm_release` resource is removed (standalone charts and the umbrella chart), together with the `helm` and `null` provider requirements;
-* `null_resource.wait_for_cluster` is removed, together with the `wait_for_cluster_ready` and `castai_api_token` inputs;
-* the Omni capability is removed (`install_omni`), because it installs its operators with Helm;
-* all chart inputs are removed: `<chart>_values`, `<chart>_version`, `install_*`, `self_managed`, `umbrella_enabled`, `workload_autoscaler_keep_crds`, `overwrite_existing_helm_releases`, `castai_components_labels`, `castai_components_sets`, `api_url`, `grpc_url`, `kvisor_grpc_addr`, `kvisor_controller_extra_args` and `organization_id`.
-
-Install and upgrade the CAST AI components separately. The module keeps the Azure IAM resources, the CAST AI cluster registration, node configurations and templates, autoscaler settings, workload scaling policies, custom metrics data sources and the `create_role` switch described above.
-
-> [!CAUTION]
-> Applying this release while the Helm releases above are still in the Terraform state plans their **destruction**, which runs `helm uninstall` and removes the CAST AI components from the cluster. To keep the components installed and manage them outside of this module, remove them from the state first:
->
-> ```bash
-> terraform state list | grep -E '^(helm_release|null_resource\.wait_for_cluster)' | xargs -r -n1 terraform state rm
-> ```
->
-> Then remove the deleted inputs from the module block. Upgrading from 11.x.x or older to this release still requires completing the 12.x.x umbrella migration first if you want to keep using the Helm charts.
-
-# Examples 
-
-Usage examples are located in [terraform provider repo](https://github.com/castai/terraform-provider-castai/tree/master/examples/aks)
+Apache 2.0, see [LICENSE](LICENSE). Derived from [castai/terraform-castai-aks](https://github.com/castai/terraform-castai-aks).
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -614,6 +233,8 @@ No modules.
 | <a name="input_autoscaler_settings"></a> [autoscaler\_settings](#input\_autoscaler\_settings) | Optional Autoscaler policy definitions to override current autoscaler settings | `any` | `null` | no |
 | <a name="input_azuread_owners"></a> [azuread\_owners](#input\_azuread\_owners) | A set of object IDs of principals that will be granted ownership of the Azure AD service principal and application. Defaults to current user. | `list(string)` | `null` | no |
 | <a name="input_ca_certs"></a> [ca\_certs](#input\_ca\_certs) | List of base64-encoded CA certificates to add to the node's trust store. | `list(string)` | `[]` | no |
+| <a name="input_castai_api_token"></a> [castai\_api\_token](#input\_castai\_api\_token) | CAST AI API token created in console.cast.ai API Access keys section | `string` | n/a | yes |
+| <a name="input_castai_api_url"></a> [castai\_api\_url](#input\_castai\_api\_url) | URL of alternative CAST AI API to be used during development or testing | `string` | `"https://api.cast.ai"` | no |
 | <a name="input_create_role"></a> [create\_role](#input\_create\_role) | When true (default), the module creates the custom Azure role definition used by CAST AI and assigns it to the CAST AI principal for `resource_group`, `node_resource_group` and `additional_resource_groups`. When false, only the authentication resources (Azure AD application, service principal and secret, or managed identity and federated identity credential) and the CAST AI cluster registration are created; no role definition or role assignment is created, so the required permissions must be granted by other means. | `bool` | `true` | no |
 | <a name="input_default_node_configuration"></a> [default\_node\_configuration](#input\_default\_node\_configuration) | ID of the default node configuration | `string` | `""` | no |
 | <a name="input_default_node_configuration_name"></a> [default\_node\_configuration\_name](#input\_default\_node\_configuration\_name) | Name of the default node configuration | `string` | `""` | no |

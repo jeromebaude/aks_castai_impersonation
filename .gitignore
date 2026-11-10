@@ -16,6 +16,8 @@ crash.*.log
 # Local variable files (may contain secrets such as the CAST AI API token)
 *.tfvars
 *.tfvars.json
+terraform.tfvars.*
+!terraform.tfvars.example
 
 # Terraform override files
 override.tf

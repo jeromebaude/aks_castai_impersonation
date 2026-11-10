@@ -141,12 +141,23 @@ terraform state list | grep -E '^(helm_release|null_resource\.wait_for_cluster)'
 Tests
 -----
 
+CI runs the suite with OpenTofu:
+
 ```bash
-terraform init
-terraform test
+tofu init -backend=false
+tofu test
 ```
 
-The `tests/*.tftest.hcl` files use mocked providers, so they need no cloud access and no credentials.
+The `tests/*.tftest.hcl` files use mocked providers, so they need no cloud access and no credentials. Run them with OpenTofu rather than Terraform: Terraform's own mock implementation returns `unknown condition value` at plan time for two runs that assert cross-resource values, so the suite is validated against OpenTofu in CI.
+
+What CI runs
+------------
+
+| Workflow | Checks |
+|---|---|
+| `.github/workflows/test.yaml` | `tofu init -backend=false` and `tofu test -verbose`, on OpenTofu 1.10 and latest |
+| `.github/workflows/validate.yaml` | `terraform init -backend=false`, `terraform validate`, `terraform fmt -check -recursive` and `tflint`, on Terraform 1.11 and latest |
+| `.github/workflows/documentation.yaml` | regenerates the generated block with terraform-docs v0.24.0 and fails if `README.md` differs |
 
 Repository layout
 -----------------
@@ -179,7 +190,7 @@ Apache 2.0, see [LICENSE](LICENSE). Derived from [castai/terraform-castai-aks](h
 ## Requirements
 
 | Name | Version |
-|------|---------|
+| ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 0.13 |
 | <a name="requirement_azuread"></a> [azuread](#requirement\_azuread) | >= 3.0 |
 | <a name="requirement_azurerm"></a> [azurerm](#requirement\_azurerm) | >= 5.0.1 |
@@ -188,7 +199,7 @@ Apache 2.0, see [LICENSE](LICENSE). Derived from [castai/terraform-castai-aks](h
 ## Providers
 
 | Name | Version |
-|------|---------|
+| ---- | ------- |
 | <a name="provider_azuread"></a> [azuread](#provider\_azuread) | >= 3.0 |
 | <a name="provider_azurerm"></a> [azurerm](#provider\_azurerm) | >= 5.0.1 |
 | <a name="provider_castai"></a> [castai](#provider\_castai) | >= 8.57.0 |
@@ -200,7 +211,7 @@ No modules.
 ## Resources
 
 | Name | Type |
-|------|------|
+| ---- | ---- |
 | [azuread_application.castai](https://registry.terraform.io/providers/hashicorp/azuread/latest/docs/resources/application) | resource |
 | [azuread_application_password.castai](https://registry.terraform.io/providers/hashicorp/azuread/latest/docs/resources/application_password) | resource |
 | [azuread_service_principal.castai](https://registry.terraform.io/providers/hashicorp/azuread/latest/docs/resources/service_principal) | resource |
@@ -224,7 +235,7 @@ No modules.
 ## Inputs
 
 | Name | Description | Type | Default | Required |
-|------|-------------|------|---------|:--------:|
+| ---- | ----------- | ---- | ------- | :------: |
 | <a name="input_additional_resource_groups"></a> [additional\_resource\_groups](#input\_additional\_resource\_groups) | n/a | `list(string)` | `[]` | no |
 | <a name="input_aks_cluster_name"></a> [aks\_cluster\_name](#input\_aks\_cluster\_name) | Name of the cluster to be connected to CAST AI. | `string` | n/a | yes |
 | <a name="input_aks_cluster_region"></a> [aks\_cluster\_region](#input\_aks\_cluster\_region) | Region of the AKS cluster | `string` | n/a | yes |
@@ -254,8 +265,9 @@ No modules.
 ## Outputs
 
 | Name | Description |
-|------|-------------|
+| ---- | ----------- |
 | <a name="output_castai_node_configurations"></a> [castai\_node\_configurations](#output\_castai\_node\_configurations) | Map of node configurations ids by name |
 | <a name="output_castai_node_templates"></a> [castai\_node\_templates](#output\_castai\_node\_templates) | Map of node template by name |
 | <a name="output_cluster_id"></a> [cluster\_id](#output\_cluster\_id) | CAST.AI cluster id, which can be used for accessing cluster data using API |
-| <a name="output_organization_id"></a> [organization\_id](#output\_organization\_id) | CAST.AI organization id of the cluster |<!-- END_TF_DOCS -->
+| <a name="output_organization_id"></a> [organization\_id](#output\_organization\_id) | CAST.AI organization id of the cluster |
+<!-- END_TF_DOCS -->

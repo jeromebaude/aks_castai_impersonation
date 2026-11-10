@@ -4,6 +4,12 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   terraform_validation:
@@ -25,40 +31,25 @@ jobs:
         run: terraform version
 
       - name: Terraform init
-        run: "terraform init || terraform init -upgrade"
+        run: terraform init -backend=false -input=false
 
       - name: Terraform validate
-        run: "terraform validate"
+        run: terraform validate -no-color
 
       - name: Terraform fmt
-        run: |
-          terraform fmt
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "ERROR: terraform fmt resulted in changes. Run 'terraform fmt' locally and append the changes."
-            echo
-            git diff
-            echo
-            git status
-            exit 1
-          fi
+        run: terraform fmt -check -recursive -diff
 
   tflint:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
-        name: Checkout source code
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-      - uses: actions/cache@v3
-        name: Cache plugin dir
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6.3.2
         with:
-          path: ~/.tflint.d/plugins
-          key: tflint-${{ hashFiles('.tflint.hcl') }}
-
-      - uses: terraform-linters/setup-tflint@v1
-        name: Setup TFLint
-        with:
-          tflint_version: v0.60.0
+          tflint_version: v0.66.0
 
       - name: Show version
         run: tflint --version
@@ -66,8 +57,7 @@ jobs:
       - name: Init TFLint
         run: tflint --init
         env:
-          # https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Run TFLint
-        run: tflint -f compact
+        run: tflint --format compact
